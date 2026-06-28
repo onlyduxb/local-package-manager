@@ -9,11 +9,10 @@ from platformdirs import user_config_dir
 DEFAULT_CONFIG_DIR = Path(user_config_dir("lpm"))
 
 
-
 def save_config(
     config: dict[str, Any], tokens: dict[str, Any], base_dir: Path = DEFAULT_CONFIG_DIR
 ):
-    if not base_dir.exists(): 
+    if not base_dir.exists():
         base_dir.mkdir(parents=True, exist_ok=True)
 
     config_file = base_dir / "config.json"
@@ -34,12 +33,6 @@ def save_env(tokens: dict[str, str], env_path: Path):
 
     env_path.chmod(0o600)
 
-def load_config(base_dir: Path = DEFAULT_CONFIG_DIR) -> tuple[dict[str, Any], dict[str, str]]:
-    config_file = base_dir / "config.json"
-    if not config_file.exists():
-        return {"lpm_dir": str(base_dir)}, load_env()
-    with open(config_file, "r") as file:
-        return json.load(file), load_env(base_dir)
 
 def load_env(base_dir: Path = DEFAULT_CONFIG_DIR) -> dict[str, str]:
     env_file = base_dir / ".env"

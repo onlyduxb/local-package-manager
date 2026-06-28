@@ -4,7 +4,7 @@ import click
 import requests
 import subprocess
 from pathlib import Path
-from .config import save_config, load_config, DEFAULT_CONFIG_DIR
+from .config import save_config, DEFAULT_CONFIG_DIR
 
 @click.command()
 @click.option("--clear", help="Clear the current configuration file.", is_flag=True)
@@ -36,12 +36,7 @@ def setup(clear: bool):
             tokens["pypi_token"] = click.prompt("Enter PyPI token: ", hide_input=True)
         else:
             config["pypi_username"] = tokens["pypi_token"] = None
-        config_path = click.prompt(
-            "\nStorage location", default=str(DEFAULT_CONFIG_DIR)
-        )
-    else:
-        config_path = str(DEFAULT_CONFIG_DIR)
-    save_config(config, tokens, Path(config_path))
+    save_config(config, tokens, Path( str(DEFAULT_CONFIG_DIR)))
 
 @click.command()
 @click.option(
