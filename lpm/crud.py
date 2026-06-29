@@ -36,7 +36,7 @@ def setup(clear: bool):
             tokens["pypi_token"] = click.prompt("Enter PyPI token: ", hide_input=True)
         else:
             config["pypi_username"] = tokens["pypi_token"] = None
-    save_config(config, tokens, Path( str(DEFAULT_CONFIG_DIR)))
+    save_config(config, tokens, Path(str(DEFAULT_CONFIG_DIR)))
 
 @click.command()
 @click.option(
@@ -131,15 +131,3 @@ def check_dependencies(dependency_list: dict[str, str], codes: bool) -> bool:
         return True
     click.secho(f"Private dependencies found.", fg="red")
     return False
-
-
-
-# - The gitea host (default is localhost:3000).
-# - Your gitea username.
-# - Gitea token.
-# - Github username (optional as lpm can be used to publish to github).
-# - Github token (skipped if the username is left blank).
-# - Pypi username (optional as lpm can be used to publish to pypi).
-# - Pypi token (skipped if the username is left blank).
-# - Storage location
-# - Default python interpreter.

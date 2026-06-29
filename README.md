@@ -10,15 +10,38 @@ Run the install wizard `lpm setup`. You will be asked for a series of informatio
 
 - The gitea host (default is localhost:3000).
 - Your gitea username.
-- Gitea token.
-- Github username (optional as lpm can be used to publish to github).
+- Gitea token, details to obtain this token can be found below.
+- Github username (optional as lpm can be used to publish to github), details of how to obtain token found below.
 - Github token (skipped if the username is left blank).
-- Pypi username (optional as lpm can be used to publish to pypi).
+- Pypi username (optional as lpm can be used to publish to pypi), details of how to obtain token found below.
 - Pypi token (skipped if the username is left blank).
 - Storage location
 - Default python interpreter.
 
 To clear the current configuration run `lpm setup --clear`.
+
+### Tokens
+
+Go to the gitea host (e.g localhost:3000/user/settings/applications) and create a token with the following settings:
+
+- Repositories > Read and Write
+- User > Read (this may not be needed)
+
+Then press generate token.
+
+Go to github and go to personal access tokens. Then press 'fine-grained token'.
+
+- Repository access > All Repos > Read and Write
+- Permissions > Context > Read and Write
+- Permissions > Administration > Read and Write
+
+Then press generate token.
+
+For pypi, go to pypi's account settings.
+
+- Scope > Entire account
+
+Then press generate token.
 
 ## Commands
 
@@ -26,9 +49,9 @@ Command prefix is `lpm` meaning 'local package manager'.
 
 - `install [package name]`
 - `update [package name]` update the specified package.
-- `show [package name]` show information about the specified package.
 - `publish [platform]` supported platforms are pypi and github will publish the local repository to the provided platform, any local dependencies used can be handled in four ways (found in the uploading packages section).
 - `check --project [project path] --codes`, defaults to the current directory, shows if any packages cannot be found globally. Codes is false by default and shows status code response from pypi.
+- `show [package name]` show information about the specified package.
 
 ## Uploading packages
 
@@ -39,6 +62,10 @@ When you publish a local package to a public space such as pypi or github lpm wi
 3. Vendor, the source code of the local packages is copied directly into your codebase under the _vendor/ directory.
 4. Abort and handle it manually.
 
+## Notes
+
+Gitea token found in notes app.
+
 ## Author
 
-Adam Worsnip (onlyduxb).
+This project was created and is maintained solely by Adam Worsnip (onlyduxb).
