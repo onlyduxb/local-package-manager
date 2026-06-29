@@ -9,7 +9,7 @@ requires-python = ">=3.12"
 dependencies = ["click (>=8.4.1,<9.0.0)", "platformdirs (>=4.10.0,<5.0.0)", "requests (>=2.34.2,<3.0.0)"]
 
 [project.scripts]
-lpm = "lpm.cli:main"
+lpm = "lpm.entrypoint:main"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
