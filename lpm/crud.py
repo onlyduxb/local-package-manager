@@ -23,7 +23,7 @@ class RegistryPackageInfo(PackageInfo):
     path: str
 
 
-class LockPackageInfo(PackageInfo):
+class DependencyPackageInfo(PackageInfo):
     editable: bool
 
 
@@ -34,7 +34,63 @@ class PackageSchema[T: PackageInfo](BaseModel):
 class RegistryPackageSchema(PackageSchema[RegistryPackageInfo]): ...
 
 
-class LockPackageSchema(PackageSchema[LockPackageInfo]): ...
+class DependencyPackageSchema(PackageSchema[DependencyPackageInfo]): ...
+
+
+class StorageHandler:
+    def __init__(self, path: Path, structure_model: type[PackageSchema[Any]]) -> None:
+        self.path = path
+        self.structure_model = structure_model
+
+    def register(self, package_info: PackageDict):
+        validated_info = validate_package_structure(package_info, self.structure_model)
+        if validated_info is None:
+            return
+
+        if os.path.exists(self.path):
+            registry = load_json(self.path)
+            for package_name in package_info.keys():
+                registry[package_name] = package_info[package_name]
+            save_json(registry, self.path)
+        else:
+            click.secho(f"Registry does not exist", fg="yellow")
+            save_json(package_info, self.path)
+            click.secho(f"Created registry at {self.path}")
+        click.secho(f"Wrote package to file at {self.path}", fg="green")
+
+    def update(self, package_info: PackageDict):
+        for package_name in package_info.keys():
+            if self.remove_package(package_name):
+                self.register(package_info)
+
+    def get_all(self) -> PackageDict:
+        try:
+            return load_json(self.path)
+        except:
+            return {}
+
+    def get_package(self, package_name: str):
+        return load_json(self.path).get(package_name)
+
+    def remove_package(self, package_name: str):
+        try:
+            data = load_json(self.path)
+            data.pop(package_name)
+            save_json(data, self.path)
+            return True
+        except:
+            click.secho(f"Package not found in registry ({self.path})", fg="red")
+        return False
+
+
+class RegistryHandler(StorageHandler):
+    def __init__(self, path: Path = DEFAULT_REGISTRY_PATH) -> None:
+        super().__init__(path, RegistryPackageSchema)
+
+
+class DependencyHandler(StorageHandler):
+    def __init__(self, path: Path = DEFAULT_DEPENDENCY_PATH) -> None:
+        super().__init__(path, DependencyPackageSchema)
 
 
 def load_json(path: Path) -> PackageDict:
@@ -64,87 +120,12 @@ def validate_package_structure[T: PackageSchema[Any]](
         return None
 
 
-def register_package(
-    package_info: dict[str, dict[str, Any]], registry_path: Path = DEFAULT_REGISTRY_PATH
-):
-    validated_info = validate_package_structure(package_info, RegistryPackageSchema)
-    if validated_info is None:
-        return
+# dependency_handler = DependencyHandler()
+# registry_handler = RegistryHandler()
 
-    if os.path.exists(registry_path):
-        registry = load_json(registry_path)
-        for package_name in package_info.keys():
-            registry[package_name] = package_info[package_name]
-        save_json(registry, registry_path)
-    else:
-        click.secho(f"Registry does not exist", fg="yellow")
-        save_json(package_info, registry_path)
-        click.secho(f"Created registry at {registry_path}")
-    click.secho(f"Wrote package to file at {registry_path}", fg="green")
-
-
-def register_dependency(
-    dependency_info: dict[str, dict[str, Any]], dependency_path: Path = DEFAULT_DEPENDENCY_PATH
-):
-    validated_info = validate_package_structure(dependency_info, LockPackageSchema)
-    if validated_info is None:
-        return
-
-    if os.path.exists(dependency_path):
-        dependencies = load_json(dependency_path)
-        for package_name in dependency_info.keys():
-            dependencies[package_name] = dependency_info[package_name]
-        save_json(dependencies, dependency_path)
-    else:
-        click.secho(f"Lock file does not exist", fg="yellow")
-        save_json(dependency_info, dependency_path)
-        click.secho(f"Created lock at {dependency_path}")
-    click.secho(f"Wrote package to file at {dependency_path}", fg="green")
-
-
-def get_registry(
-    registry_path: Path = DEFAULT_REGISTRY_PATH,
-) -> PackageDict:
-    try:
-        return load_json(registry_path)
-    except:
-        return {}
-
-
-def get_dependencies(dependency_path: Path = DEFAULT_DEPENDENCY_PATH) -> PackageDict:
-    try:
-        return load_json(dependency_path)
-    except:
-        return {}
-
-
-def get_package(package_name: str, registry_path: Path = DEFAULT_REGISTRY_PATH):
-    return load_json(registry_path).get(package_name)
-
-def get_dependency(dependency_name: str, dependency_path: Path = DEFAULT_DEPENDENCY_PATH):
-    return load_json(dependency_path).get(dependency_name)
-
-def remove_package(package_name: str, registry_path: Path = DEFAULT_REGISTRY_PATH):
-    try:
-        data = load_json(registry_path)
-        data.pop(package_name)
-        save_json(data, registry_path)
-    except:
-        click.secho(f"Package not found in registry ({registry_path})", fg="red")
-
-
-def remove_dependency(dependency_name: str, dependency_path: Path = DEFAULT_DEPENDENCY_PATH):
-    try:
-        data = load_json(dependency_path)
-        data.pop(dependency_name)
-        save_json(data, dependency_path)
-    except:
-        click.secho(f"Package not found in registry ({dependency_path})", fg="red")
-
-
-# register_dependency(
+# dependency_handler.register(
 #     {
-#         "package_name2": {
+#         "package_name": {
 #             "gitea_url": "url",
 #             "version": "0.0.0.0",
 #             "editable": False,
@@ -152,11 +133,11 @@ def remove_dependency(dependency_name: str, dependency_path: Path = DEFAULT_DEPE
 #     }
 # )
 
-# register_package(
-#     {"package_name2": {"gitea_url": "url", "version": "0.0.0.0", "path": "shush"}}
+# registry_handler.update(
+#     {"package_name2": {"gitea_url": "url", "version": "0.0.0.5", "path": "shush"}}
 # )
 
-# register_package(
+# registry_handler.register(
 #     {
 #         "bad_package": {
 #             "gitea_url": "url",
@@ -166,7 +147,6 @@ def remove_dependency(dependency_name: str, dependency_path: Path = DEFAULT_DEPE
 #         }
 #     }
 # )
-
 
 # {"package_name": {
 #     "path": "foo/baz",
