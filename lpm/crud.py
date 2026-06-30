@@ -9,7 +9,7 @@ import os
 import click
 
 DEFAULT_REGISTRY_PATH = Path(user_data_dir("lpm")) / "registry.json"
-DEFAULT_LOCK_PATH = Path(os.getcwd()) / "lpm.lock"
+DEFAULT_DEPENDENCY_PATH = Path(os.getcwd()) / "lpm.lock"
 
 type PackageDict = dict[str, dict[str, Any]]
 
@@ -84,22 +84,22 @@ def register_package(
 
 
 def register_dependency(
-    dependency_info: dict[str, dict[str, Any]], lock_path: Path = DEFAULT_LOCK_PATH
+    dependency_info: dict[str, dict[str, Any]], dependency_path: Path = DEFAULT_DEPENDENCY_PATH
 ):
     validated_info = validate_package_structure(dependency_info, LockPackageSchema)
     if validated_info is None:
         return
 
-    if os.path.exists(lock_path):
-        dependencies = load_json(lock_path)
+    if os.path.exists(dependency_path):
+        dependencies = load_json(dependency_path)
         for package_name in dependency_info.keys():
             dependencies[package_name] = dependency_info[package_name]
-        save_json(dependencies, lock_path)
+        save_json(dependencies, dependency_path)
     else:
         click.secho(f"Lock file does not exist", fg="yellow")
-        save_json(dependency_info, lock_path)
-        click.secho(f"Created lock at {lock_path}")
-    click.secho(f"Wrote package to file at {lock_path}", fg="green")
+        save_json(dependency_info, dependency_path)
+        click.secho(f"Created lock at {dependency_path}")
+    click.secho(f"Wrote package to file at {dependency_path}", fg="green")
 
 
 def get_registry(
@@ -111,12 +111,18 @@ def get_registry(
         return {}
 
 
-def get_dependencies(lock_path: Path = DEFAULT_LOCK_PATH) -> PackageDict:
+def get_dependencies(dependency_path: Path = DEFAULT_DEPENDENCY_PATH) -> PackageDict:
     try:
-        return load_json(lock_path)
+        return load_json(dependency_path)
     except:
         return {}
 
+
+def get_package(package_name: str, registry_path: Path = DEFAULT_REGISTRY_PATH):
+    return load_json(registry_path).get(package_name)
+
+def get_dependency(dependency_name: str, dependency_path: Path = DEFAULT_DEPENDENCY_PATH):
+    return load_json(dependency_path).get(dependency_name)
 
 def remove_package(package_name: str, registry_path: Path = DEFAULT_REGISTRY_PATH):
     try:
@@ -127,13 +133,13 @@ def remove_package(package_name: str, registry_path: Path = DEFAULT_REGISTRY_PAT
         click.secho(f"Package not found in registry ({registry_path})", fg="red")
 
 
-def remove_dependency(dependency_name: str, lock_path: Path = DEFAULT_LOCK_PATH):
+def remove_dependency(dependency_name: str, dependency_path: Path = DEFAULT_DEPENDENCY_PATH):
     try:
-        data = load_json(lock_path)
+        data = load_json(dependency_path)
         data.pop(dependency_name)
-        save_json(data, lock_path)
+        save_json(data, dependency_path)
     except:
-        click.secho(f"Package not found in registry ({lock_path})", fg="red")
+        click.secho(f"Package not found in registry ({dependency_path})", fg="red")
 
 
 # register_dependency(
