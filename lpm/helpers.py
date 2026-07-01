@@ -7,7 +7,6 @@ from pathlib import Path
 
 VENV_CANDIDATES = [".venv", "venv", "env", ".env_py"]
 
-
 def collect_packages(venv_path: Path) -> dict[str, str]:
     python = get_venv_python(venv_path)
     result = subprocess.run(

@@ -6,7 +6,7 @@ authors = [{ name = "Adam Worsnip" }]
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["click (>=8.4.1,<9.0.0)", "platformdirs (>=4.10.0,<5.0.0)", "requests (>=2.34.2,<3.0.0)"]
+dependencies = ["click (>=8.4.1,<9.0.0)", "platformdirs (>=4.10.0,<5.0.0)", "requests (>=2.34.2,<3.0.0)", "dotenv (>=0.9.9,<0.10.0)", "pydantic (>=2.13.4,<3.0.0)"]
 
 [project.scripts]
 lpm = "lpm.entrypoint:main"
