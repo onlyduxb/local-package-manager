@@ -3,6 +3,7 @@
 import click
 from pathlib import Path
 from typing import Any
+import shutil
 from .crud import (
     DEFAULT_PACKAGES_PATH,
     DependencyHandler,
@@ -137,4 +138,25 @@ def install(package_name: str, editable: bool):
             else:
                 pip_install(venv, package_path)
     else:
-        click.secho("Dependency already installed.", fg="red")
+        click.secho("Package already installed.", fg="red")
+
+@click.command()
+@click.argument("package_name")
+def uninstall(package_name: str):
+    registry_handler = RegistryHandler()
+    dependency_handler = DependencyHandler()
+    if dependency_handler.get_package(package_name) is not None:
+        dependency_handler.remove_package(package_name)
+        click.secho("Removed package from dependencies.", fg="green")
+    else:
+        click.secho("Could not find package in dependencies", fg="red")
+    if registry_handler.get_package(package_name) is not None:
+        registry_handler.remove_package(package_name)
+        click.secho("Removed package from registry.", fg="green")
+    else:
+        click.secho("Could not find package in registry", fg="red")
+    if Path.exists(DEFAULT_PACKAGES_PATH/package_name):
+        shutil.rmtree(DEFAULT_PACKAGES_PATH/package_name)
+        click.secho("Removed package from packages.", fg="green")
+    else:
+        click.secho("Could not find package from packages.", fg="red")

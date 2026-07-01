@@ -10,3 +10,4 @@ def main():
 main.add_command(commands.setup)
 main.add_command(commands.check)
 main.add_command(commands.install)
+main.add_command(commands.uninstall)
