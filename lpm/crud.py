@@ -14,7 +14,6 @@ import click
 
 DEFAULT_REGISTRY_FILE = Path(user_config_dir("lpm")) / "registry.json"
 DEFAULT_PACKAGES_PATH = Path(user_data_dir("lpm")) / "packages"
-DEFAULT_DEPENDENCY_FILE = Path(os.getcwd()) / "lpm.lock"
 type PackageDict = dict[str, dict[str, Any]]
 
 
@@ -114,16 +113,15 @@ class RegistryHandler(StorageHandler):
         super().__init__(path, RegistryPackageSchema)
 
 
-class DependencyHandler(StorageHandler):
-    def __init__(self, path: Path = DEFAULT_DEPENDENCY_FILE) -> None:
-        super().__init__(path, DependencyPackageSchema)
-
-
 def load_json(file: Path) -> PackageDict:
     try:
-        with open(file, "r") as fp:
-            registry = json.load(fp)
-        return registry
+        if os.path.exists(file):
+            with open(file, "r") as fp:
+                registry = json.load(fp)
+            return registry
+        else:
+            with open(file, "w") as fp:
+                fp.write("{}")
     except:
         click.secho(
             f"Could not load {file.name}.",
@@ -240,7 +238,7 @@ def get_package_version(package_path: Path) -> str | None:
 
 def build_package_records(
     package_name: str, gitea_url: str, version: str, path: Path, editable: bool
-) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, Any]]]:
+) -> dict[str, dict[str, str]]:
     register_info = {
         package_name: {
             "gitea_url": gitea_url,
@@ -248,14 +246,7 @@ def build_package_records(
             "path": str(path),
         }
     }
-    dependency_info: dict[str, dict[str, Any]] = {
-        package_name: {
-            "gitea_url": gitea_url,
-            "version": version,
-            "editable": editable,
-        }
-    }
-    return register_info, dependency_info
+    return register_info
 
 
 def resolve_package_path(
@@ -263,7 +254,6 @@ def resolve_package_path(
     version: str | None,
     editable: bool,
     registry_handler: RegistryHandler,
-    dependency_handler: DependencyHandler,
 ) -> Path | None:
     package = registry_handler.get_package(package_name)
 
@@ -286,9 +276,7 @@ def resolve_package_path(
         click.secho(f"Could not find {label} in repository.", fg="red")
         return None
 
-    return fetch_and_register_package(
-        package_name, editable, registry_handler, dependency_handler
-    )
+    return fetch_and_register_package(package_name, editable, registry_handler)
 
 
 def find_wheel(package_path: Path, version: str | None) -> Path | None:
@@ -315,7 +303,6 @@ def fetch_and_register_package(
     package_name: str,
     editable: bool,
     registry_handler: RegistryHandler,
-    dependency_handler: DependencyHandler,
 ) -> Path | None:
     gitea_url = get_gitea_auth_url(package_name)
     status_code = get_status(gitea_url)
@@ -331,11 +318,10 @@ def fetch_and_register_package(
     package_version = str(get_package_version(package_path))
     public_url = get_gitea_public_url(package_name)
 
-    register_info, dependency_info = build_package_records(
+    register_info = build_package_records(
         package_name, public_url, package_version, package_path, editable
     )
     registry_handler.register(register_info)
-    dependency_handler.register(dependency_info)
     return package_path
 
 
@@ -363,12 +349,24 @@ def uninstall_from_venv(package_name: str, venv: Path):
             capture_output=True,
             text=True,
         )
-        
+
         if f"Skipping {package_name} as it is not installed" in result.stderr:
-            click.secho(f"Package {package_name} was not found in the venv.", fg="yellow")
+            click.secho(
+                f"Package {package_name} was not found in the venv.", fg="yellow"
+            )
             return False
-            
+
         return True
     except subprocess.CalledProcessError as e:
         click.secho(f"Failed to uninstall {package_name}: {e.stderr}", fg="red")
         return False
+
+
+def is_installed_in_venv(package_name: str, venv: Path) -> bool:
+    python = get_venv_python(venv)
+    result = subprocess.run(
+        [str(python), "-m", "pip", "show", package_name],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0

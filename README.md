@@ -47,11 +47,11 @@ Then press generate token.
 
 Command prefix is `lpm` meaning 'local package manager'.
 
-- `install [package name]`
+- `install [package name]` install the package to the current directory.
 - `update [package name]` update the specified package.
 - `publish [platform]` supported platforms are pypi and github will publish the local repository to the provided platform, any local dependencies used can be handled in four ways (found in the uploading packages section).
 - `check --project [project path] --codes`, defaults to the current directory, shows if any packages cannot be found globally. Codes is false by default and shows status code response from pypi.
-- `show [package name]` show information about the specified package.
+- `bump` bumps the project up a version and builds so the project is ready to be published.
 
 ## Uploading packages
 
