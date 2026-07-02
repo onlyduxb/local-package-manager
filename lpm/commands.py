@@ -2,24 +2,22 @@
 
 import click
 from pathlib import Path
-from typing import Any
 import shutil
 from .crud import (
     DEFAULT_PACKAGES_PATH,
     DependencyHandler,
     RegistryHandler,
-    get_gitea_auth_url,
-    get_gitea_public_url,
-    get_package_version,
-    clone_from_gitea,
-    pip_install,
-    pip_install_editable,
+    resolve_package_path,
+    install_into_venv,
+    uninstall_from_venv,
 )
 from .config import save_config, DEFAULT_CONFIG_DIR, Config
 from .helpers import resolve_venv, collect_packages, check_dependencies
 
+CONTEXT_SETTINGS = dict(allow_interspersed_args=True)
 
-@click.command()
+
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--clear", help="Clear the current configuration file.", is_flag=True)
 def setup(clear: bool):
     """Get the user's information."""
@@ -77,7 +75,7 @@ def setup(clear: bool):
     save_config(config, Path(str(DEFAULT_CONFIG_DIR)))
 
 
-@click.command()
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.option(
     "--project",
     "project_path",
@@ -85,8 +83,10 @@ def setup(clear: bool):
     default=Path.cwd(),
     help="Path to the project. Defaults to current directory.",
 )
-@click.option("--codes", help="Output the status codes from pypi.", is_flag=True)
-def check(project_path: Path, codes: bool):
+@click.option(
+    "--codes", "codes", help="Output the status codes from pypi.", is_flag=True
+)
+def check(codes: bool, project_path: Path):
     venv_path = resolve_venv(project_path)
     if venv_path is None:
         click.echo(f"No venv found in {project_path}")
@@ -95,52 +95,35 @@ def check(project_path: Path, codes: bool):
     check_dependencies(packages, codes)
 
 
-@click.command()
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.argument("package_name")
 @click.option("--editable", "editable", default=False, is_flag=True)
-def install(package_name: str, editable: bool):
+@click.option("--version", "version", default=None)
+def install(package_name: str, editable: bool, version: str | None):
     registry_handler = RegistryHandler()
     dependency_handler = DependencyHandler()
-    if dependency_handler.get_package(package_name) is None:
-        package = registry_handler.get_package(package_name)
-        if package is None:
-            gitea_url = get_gitea_auth_url(package_name)
-            package_path = clone_from_gitea(gitea_url, DEFAULT_PACKAGES_PATH / package_name)
-            if package_path is None:
-                click.secho("Unable to resolve package path.", fg="red")
-                return
-            package_version = get_package_version(package_path)
-            register_info: dict[str, dict[str, str]] = {
-                package_name: {
-                    "gitea_url": get_gitea_public_url(package_name),
-                    "version": str(package_version),
-                    "path": str(package_path),
-                }
-            }
-            dependency_info: dict[str, dict[str, Any]] = {
-                package_name: {
-                    "gitea_url": get_gitea_public_url(package_name),
-                    "version": str(package_version),
-                    "editable": editable
-                }
-            }
-            registry_handler.register(register_info)
-            dependency_handler.register(dependency_info)
-        else:
-            click.secho("Found package in register.", fg="green")
-            package_path = Path(package["path"])
-        venv = resolve_venv(Path.cwd())
-        if venv is None:
-            click.secho("Venv could not be resolved.", fg="red")
-        else:
-            if editable:
-                pip_install_editable(venv, package_path)
-            else:
-                pip_install(venv, package_path)
-    else:
-        click.secho("Package already installed.", fg="red")
 
-@click.command()
+    existing = dependency_handler.get_package(package_name)
+    if existing is not None and (version is None or existing.get("version") == version):
+        click.secho("Package already installed.", fg="red")
+        return
+
+    package_path = resolve_package_path(
+        package_name, version, editable, registry_handler, dependency_handler
+    )
+    if package_path is None:
+        return
+
+    venv = resolve_venv(Path.cwd())
+    if venv is None:
+        click.secho("Venv could not be resolved.", fg="red")
+        return
+
+    if not install_into_venv(venv, package_path, editable, version):
+        return
+
+
+@click.command(context_settings=CONTEXT_SETTINGS)
 @click.argument("package_name")
 def uninstall(package_name: str):
     registry_handler = RegistryHandler()
@@ -149,14 +132,22 @@ def uninstall(package_name: str):
         dependency_handler.remove_package(package_name)
         click.secho("Removed package from dependencies.", fg="green")
     else:
-        click.secho("Could not find package in dependencies", fg="red")
+        click.secho("Could not find package in dependencies", fg="yellow")
     if registry_handler.get_package(package_name) is not None:
         registry_handler.remove_package(package_name)
         click.secho("Removed package from registry.", fg="green")
     else:
-        click.secho("Could not find package in registry", fg="red")
-    if Path.exists(DEFAULT_PACKAGES_PATH/package_name):
-        shutil.rmtree(DEFAULT_PACKAGES_PATH/package_name)
+        click.secho("Could not find package in registry", fg="yellow")
+    if Path.exists(DEFAULT_PACKAGES_PATH / package_name):
+        shutil.rmtree(DEFAULT_PACKAGES_PATH / package_name)
         click.secho("Removed package from packages.", fg="green")
     else:
-        click.secho("Could not find package from packages.", fg="red")
+        click.secho("Could not find package from packages.", fg="yellow")
+    venv = resolve_venv(Path.cwd())
+    if venv is None:
+        click.secho("Venv could not be resolved.", fg="red")
+        return
+    if uninstall_from_venv(package_name, venv):
+        click.secho("Removed package from venv.", fg="green")
+    else:
+        click.secho("Failed to remove package from venv.", fg="red")

@@ -4,6 +4,7 @@ from pydantic import BaseModel, ValidationError
 from .helpers import get_venv_python
 from .config import load_config, DEFAULT_CONFIG_DIR
 import subprocess
+import requests
 from platformdirs import user_config_dir, user_data_dir
 from typing import Dict, Any
 import tomllib
@@ -78,11 +79,10 @@ class StorageHandler:
                 registry[package_name] = package_info[package_name]
             save_json(registry, self.path)
         else:
-            click.secho(f"JSON file does not exist", fg="yellow")
+            click.secho(f"{self.path.name} does not exist", fg="yellow")
             save_json(package_info, self.path)
-            click.secho(f"Created JSON file at {self.path}", fg="blue")
+            click.secho(f"Created {self.path.name} at {self.path}", fg="blue")
         click.secho(f"Wrote package to file at {self.path}", fg="green")
-
 
     def update(self, package_info: PackageDict):
         package_name = next(iter(package_info))
@@ -118,6 +118,7 @@ class DependencyHandler(StorageHandler):
     def __init__(self, path: Path = DEFAULT_DEPENDENCY_FILE) -> None:
         super().__init__(path, DependencyPackageSchema)
 
+
 def load_json(file: Path) -> PackageDict:
     try:
         with open(file, "r") as fp:
@@ -125,43 +126,41 @@ def load_json(file: Path) -> PackageDict:
         return registry
     except:
         click.secho(
-            f"Could not load JSON file.",
+            f"Could not load {file.name}.",
             fg="red",
         )
     return {}
 
 
-def pip_install_editable(venv_path: Path, local_path: Path) -> bool:
+def pip_install(venv_path: Path, wheel_path: Path) -> bool:
     python = get_venv_python(venv_path)
-
     try:
         subprocess.run(
-            [str(python), "-m", "pip", "install", "-e", str(local_path)],
+            [str(python), "-m", "pip", "install", str(wheel_path)],
             check=True,
             capture_output=True,
             text=True,
         )
-        click.secho(f"Installed {local_path.name} (editable)", fg="green")
+        click.secho(f"Installed {wheel_path.name} (static)", fg="green")
         return True
     except subprocess.CalledProcessError as e:
-        click.secho(f"Failed to install {local_path.name}: {e.stderr}", fg="red")
+        click.secho(f"Failed to install {wheel_path.name}: {e.stderr}", fg="red")
         return False
 
 
-def pip_install(venv_path: Path, local_path: Path) -> bool:
+def pip_install_editable(venv_path: Path, source_path: Path) -> bool:
     python = get_venv_python(venv_path)
-
     try:
         subprocess.run(
-            [str(python), "-m", "pip", "install", str(local_path)],
+            [str(python), "-m", "pip", "install", "-e", str(source_path)],
             check=True,
             capture_output=True,
             text=True,
         )
-        click.secho(f"Installed {local_path.name} (static)", fg="green")
+        click.secho(f"Installed {source_path.name} (editable)", fg="green")
         return True
     except subprocess.CalledProcessError as e:
-        click.secho(f"Failed to install {local_path.name}: {e.stderr}", fg="red")
+        click.secho(f"Failed to install {source_path.name}: {e.stderr}", fg="red")
         return False
 
 
@@ -175,10 +174,25 @@ def get_gitea_public_url(package_name: str, path: Path = DEFAULT_CONFIG_DIR):
     return f"http://{config['host']}/{config['gitea_username']}/{package_name}.git"
 
 
-def clone_from_gitea(
-    gitea_url: str,
-    package_path: Path,
-) -> Path | None:
+def check_package_exists(package_name: str):
+    return requests.get(get_gitea_auth_url(package_name)).status_code
+
+
+def get_status(url: str):
+    return requests.get(url).status_code
+
+
+def status_code_result(status_code: int):
+    status_messages = {
+        401: "Unauthorized.",
+        403: "Access not permitted.",
+        404: "Could not locate the package.",
+        500: "Internal server error.",
+    }
+    return status_messages[status_code]
+
+
+def clone_from_gitea(gitea_url: str, package_path: Path) -> Path | None:
     try:
         subprocess.run(
             ["git", "clone", gitea_url, str(package_path)],
@@ -186,19 +200,25 @@ def clone_from_gitea(
             capture_output=True,
             text=True,
         )
+        return package_path
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to clone package: {e.stderr}", fg="red")
+    return None
 
+
+def pull_latest(package_path: Path) -> bool:
+    try:
         subprocess.run(
-            ["git", "remote", "set-url", "origin", gitea_url],
+            ["git", "pull"],
             cwd=package_path,
             check=True,
             capture_output=True,
             text=True,
         )
-
-        return package_path
-    except:
-        click.secho(f"Failed to clone package.", fg="red")
-    return None
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to update package: {e.stderr}", fg="red")
+        return False
 
 
 def get_package_version(package_path: Path) -> str | None:
@@ -218,36 +238,137 @@ def get_package_version(package_path: Path) -> str | None:
             return None
 
 
-# dependency_handler = DependencyHandler()
-# registry_handler = RegistryHandler()
+def build_package_records(
+    package_name: str, gitea_url: str, version: str, path: Path, editable: bool
+) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, Any]]]:
+    register_info = {
+        package_name: {
+            "gitea_url": gitea_url,
+            "version": version,
+            "path": str(path),
+        }
+    }
+    dependency_info: dict[str, dict[str, Any]] = {
+        package_name: {
+            "gitea_url": gitea_url,
+            "version": version,
+            "editable": editable,
+        }
+    }
+    return register_info, dependency_info
 
-# dependency_handler.register(
-#     {
-#         "package_name": {
-#             "gitea_url": "url",
-#             "version": "0.0.0.0",
-#             "editable": False,
-#         }
-#     }
-# )
 
-# registry_handler.update(
-#     {"package_name2": {"gitea_url": "url", "version": "0.0.0.5", "path": "shush"}}
-# )
+def resolve_package_path(
+    package_name: str,
+    version: str | None,
+    editable: bool,
+    registry_handler: RegistryHandler,
+    dependency_handler: DependencyHandler,
+) -> Path | None:
+    package = registry_handler.get_package(package_name)
 
-# registry_handler.register(
-#     {
-#         "bad_package": {
-#             "gitea_url": "url",
-#             "version": "0.0.0.0",
-#             "path": "shush",
-#             "foul": "rotten",
-#         }
-#     }
-# )
+    if package is not None:
+        package_path = Path(package["path"])
 
-# {"package_name": {
-#     "path": "foo/baz",
-#     "gitea_url": "url",
-#     "version": "0.0.0.0"
-# }}
+        if editable:
+            click.secho("Found package in register.", fg="green")
+            return package_path
+
+        if find_wheel(package_path, version) is not None:
+            click.secho("Found package in register.", fg="green")
+            return package_path
+
+        click.secho("Wheel not found locally, pulling latest...", fg="yellow")
+        if pull_latest(package_path) and find_wheel(package_path, version) is not None:
+            return package_path
+
+        label = f"{package_name}=={version}" if version else package_name
+        click.secho(f"Could not find {label} in repository.", fg="red")
+        return None
+
+    return fetch_and_register_package(
+        package_name, editable, registry_handler, dependency_handler
+    )
+
+
+def find_wheel(package_path: Path, version: str | None) -> Path | None:
+    dist_dir = package_path / "dist"
+    if not dist_dir.exists():
+        return None
+
+    wheels = sorted(dist_dir.glob("*.whl"))
+    if not wheels:
+        return None
+
+    if version is None:
+        return wheels[-1]
+
+    for wheel in wheels:
+        parts = wheel.stem.split("-")
+        if len(parts) >= 2 and parts[1] == version:
+            return wheel
+
+    return None
+
+
+def fetch_and_register_package(
+    package_name: str,
+    editable: bool,
+    registry_handler: RegistryHandler,
+    dependency_handler: DependencyHandler,
+) -> Path | None:
+    gitea_url = get_gitea_auth_url(package_name)
+    status_code = get_status(gitea_url)
+    if status_code != 200:
+        click.secho(status_code_result(status_code), fg="red")
+        return None
+
+    package_path = clone_from_gitea(gitea_url, DEFAULT_PACKAGES_PATH / package_name)
+    if package_path is None:
+        click.secho("Unable to resolve package path.", fg="red")
+        return None
+
+    package_version = str(get_package_version(package_path))
+    public_url = get_gitea_public_url(package_name)
+
+    register_info, dependency_info = build_package_records(
+        package_name, public_url, package_version, package_path, editable
+    )
+    registry_handler.register(register_info)
+    dependency_handler.register(dependency_info)
+    return package_path
+
+
+def install_into_venv(
+    venv: Path, package_path: Path, editable: bool, version: str | None
+) -> bool:
+    if editable:
+        return pip_install_editable(venv, package_path)
+
+    wheel_path = find_wheel(package_path, version)
+    if wheel_path is None:
+        label = f"{package_path.name}=={version}" if version else package_path.name
+        click.secho(f"No matching wheel found for {label}", fg="red")
+        return False
+
+    return pip_install(venv, wheel_path)
+
+
+def uninstall_from_venv(package_name: str, venv: Path):
+    try:
+        python = get_venv_python(venv)
+        result = subprocess.run(
+            [str(python), "-m", "pip", "uninstall", package_name, "-y"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        
+        if f"Skipping {package_name} as it is not installed" in result.stderr:
+            click.secho(f"Package {package_name} was not found in the venv.", fg="yellow")
+            return False
+            
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to uninstall {package_name}: {e.stderr}", fg="red")
+        return False

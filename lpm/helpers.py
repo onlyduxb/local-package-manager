@@ -78,12 +78,13 @@ def find_poetry_venv(project_dir: Path) -> Path | None:
 def check_dependencies(dependency_list: dict[str, str], codes: bool) -> bool:
     private_dependencies: list[tuple[str, str]] = []
     for name, version in dependency_list.items():
-        click.secho(f"Checking {name} ({version}).", fg="yellow")
-        package = requests.get(f"https://pypi.org/project/{name}/{version}")
+        click.secho(f"Checking {name} ({version}).", fg="blue")
+        package = requests.get(f"https://pypi.org/pypi/{name}/{version}/json")
         if package.status_code != 200:
-            if codes:
-                click.secho(f"Pypi responded {package.status_code}", fg="red")
             private_dependencies.append((name, version))
+            click.secho(f"{name} is a private dependency", fg="red")
+        if codes:
+            click.secho(f"Pypi responded {package.status_code}", fg="blue")
     if len(private_dependencies) == 0:
         click.secho(f"There are no private dependencies.", fg="green")
         return True
