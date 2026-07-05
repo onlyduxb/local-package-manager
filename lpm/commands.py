@@ -2,17 +2,16 @@
 
 import click
 from pathlib import Path
-import shutil
 from .crud import (
-    DEFAULT_PACKAGES_PATH,
     RegistryHandler,
+    checkout_version,
+    pin_package,
+    unpin_package,
     resolve_package_path,
     install_into_venv,
     uninstall_from_venv,
     pull_latest,
     get_package_version,
-    get_gitea_auth_url,
-    build_package_records,
     is_installed_in_venv,
 )
 from .config import save_config, DEFAULT_CONFIG_DIR, Config
@@ -105,61 +104,76 @@ def check(codes: bool, project_path: Path):
 @click.option("--version", "version", default=None)
 def install(package_name: str, editable: bool, version: str | None):
     registry_handler = RegistryHandler()
+    project_path = Path.cwd()
 
-    venv = resolve_venv(Path.cwd())
+    venv = resolve_venv(project_path)
     if venv is None:
-        click.secho("Venv could not be resolved.", fg="red")
+        click.secho("No venv found in current directory.", fg="red")
         return
 
-    package_installed = is_installed_in_venv(package_name, venv)
-
-    if package_installed:
-        click.secho("Package already installed.", fg="red")
+    if is_installed_in_venv(package_name, venv):
+        click.secho(f"{package_name} is already installed.", fg="yellow")
         return
 
-    package_path = resolve_package_path(
-        package_name, version, editable, registry_handler
-    )
+    package_path = resolve_package_path(package_name, editable, registry_handler)
     if package_path is None:
         return
 
-    if not install_into_venv(venv, package_path, editable, version):
+    if version is not None:
+        if not checkout_version(package_path, version):
+            return
+    else:
+        version = get_package_version(package_path)
+
+    if not install_into_venv(venv, package_path, editable):
         return
+
+    if version:
+        pin_package(project_path, package_name, str(version))
+
+    click.secho(f"{package_name}=={version} installed.", fg="green")
 
 
 @click.command(context_settings=CONTEXT_SETTINGS)
 @click.argument("package_name")
-def uninstall(package_name: str):
-    registry_handler = RegistryHandler()
-    if registry_handler.get_package(package_name) is not None:
-        registry_handler.remove_package(package_name)
-        click.secho("Removed package from registry.", fg="green")
-    else:
-        click.secho("Could not find package in registry", fg="yellow")
-    if Path.exists(DEFAULT_PACKAGES_PATH / package_name):
-        shutil.rmtree(DEFAULT_PACKAGES_PATH / package_name)
-        click.secho("Removed package from packages.", fg="green")
-    else:
-        click.secho("Could not find package from packages.", fg="yellow")
-    venv = resolve_venv(Path.cwd())
-    if venv is None:
-        click.secho("Venv could not be resolved.", fg="red")
+@click.option("--remove-files", is_flag=True, default=False)
+def uninstall(package_name: str, remove_files: bool):
+    if not click.confirm(f"Uninstall {package_name}?"):
         return
-    if uninstall_from_venv(package_name, venv):
-        click.secho("Removed package from venv.", fg="green")
-    else:
-        click.secho("Failed to remove package from venv.", fg="red")
+
+    project_path = Path.cwd()
+    venv = resolve_venv(project_path)
+    if venv is None:
+        click.secho("No venv found in current directory.", fg="red")
+        return
+
+    if not uninstall_from_venv(package_name, venv):
+        return
+
+    unpin_package(project_path, package_name)
+
+    if remove_files:
+        registry_handler = RegistryHandler()
+        package = registry_handler.get_package(package_name)
+        if package:
+            import shutil
+
+            shutil.rmtree(package["path"])
+            registry_handler.remove_package(package_name)
+            click.secho(f"Deleted {package['path']}", fg="green")
+
+    click.secho(f"{package_name} uninstalled.", fg="green")
 
 
 @click.command(context_settings=CONTEXT_SETTINGS)
 @click.argument("package_name")
 def update(package_name: str):
     registry_handler = RegistryHandler()
+    project_path = Path.cwd()
 
     package = registry_handler.get_package(package_name)
-
     if package is None:
-        click.secho(f"{package_name} is not installed yet.", fg="red")
+        click.secho(f"{package_name} is not registered.", fg="red")
         return
 
     package_path = Path(package["path"])
@@ -172,18 +186,56 @@ def update(package_name: str):
     if version is None:
         return
 
-    gitea_url = get_gitea_auth_url(package_name)
-    register_info = build_package_records(
-        package_name, gitea_url, version, package_path, False
-    )
-    registry_handler.register(register_info)
+    registry_handler.register({
+        package_name: {
+            "gitea_url": package["gitea_url"],
+            "version": version,
+            "path": str(package_path),
+            "github_url": package.get("github_url"),
+        }
+    })
 
-    venv = resolve_venv(Path.cwd())
+    venv = resolve_venv(project_path)
     if venv is None:
-        click.secho("Venv could not be resolved.", fg="red")
+        click.secho("No venv found in current directory.", fg="red")
         return
 
-    if not install_into_venv(venv, package_path, False, None):
+    if not install_into_venv(venv, package_path, False):
         return
 
+    pin_package(project_path, package_name, str(version))
     click.secho(f"{package_name} updated to {version}.", fg="green")
+
+@click.group()
+def publish():
+    pass
+
+
+@publish.command()
+def gitea():
+    # if not run_pre_publish_checks():
+    #     return
+    # crud.push_to_gitea(Path.cwd(), DEFAULT_CONFIG_DIR)
+    raise NotImplementedError()
+
+
+@publish.command()
+def github():
+    # if not run_pre_publish_checks():
+    #     return
+    # crud.push_to_github(Path.cwd(), DEFAULT_CONFIG_DIR)
+    raise NotImplementedError()
+
+
+@publish.command()
+def pypi():
+    # if not run_pre_publish_checks():
+    #     return
+    # crud.build_package(Path.cwd())
+    # crud.upload_to_pypi(Path.cwd(), DEFAULT_CONFIG_DIR)
+    raise NotImplementedError()
+
+
+# @click.command(context_settings=CONTEXT_SETTINGS)
+# @click.argument("--no_build", "no_build", is_flag=True)
+# def bump(no_build: bool): ...

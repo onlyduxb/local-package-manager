@@ -9,46 +9,26 @@ from platformdirs import user_config_dir, user_data_dir
 from typing import Dict, Any
 import tomllib
 import json
-import os
 import click
 
 DEFAULT_REGISTRY_FILE = Path(user_config_dir("lpm")) / "registry.json"
+DEFAULT_LOCK_FILE = Path.cwd() / "lpm.lock"
 DEFAULT_PACKAGES_PATH = Path(user_data_dir("lpm")) / "packages"
+
 type PackageDict = dict[str, dict[str, Any]]
 
 
-def save_json(
-    data: PackageDict,
-    file: Path,
-):
-    with open(file, "w") as fp:
-        json.dump(data, fp, indent=4)
-
-
-def validate_package_structure[T: PackageSchema[Any]](
-    package_info: PackageDict, model: type[T]
-) -> None | T:
-    try:
-        return model.model_validate({"package": package_info}, extra="forbid")
-    except ValidationError:
-        click.secho(
-            f"Package info ({[package_name for package_name in package_info.keys()]}) is incorrectly formatted.",
-            fg="red",
-        )
-        return None
+# ── Models ────────────────────────────────────────────────────────────────────
 
 
 class PackageInfo(BaseModel):
-    gitea_url: str
     version: str
 
 
 class RegistryPackageInfo(PackageInfo):
+    gitea_url: str
     path: str
-
-
-class DependencyPackageInfo(PackageInfo):
-    editable: bool
+    github_url: str | None = None
 
 
 class PackageSchema[T: PackageInfo](BaseModel):
@@ -58,7 +38,46 @@ class PackageSchema[T: PackageInfo](BaseModel):
 class RegistryPackageSchema(PackageSchema[RegistryPackageInfo]): ...
 
 
-class DependencyPackageSchema(PackageSchema[DependencyPackageInfo]): ...
+class DependencyPackageSchema(PackageSchema[PackageInfo]): ...
+
+
+# ── JSON helpers ──────────────────────────────────────────────────────────────
+
+
+def load_json(file: Path) -> PackageDict:
+    try:
+        if file.exists():
+            with open(file, "r") as fp:
+                return json.load(fp)
+        else:
+            file.parent.mkdir(parents=True, exist_ok=True)
+            with open(file, "w") as fp:
+                fp.write("{}")
+    except Exception:
+        click.secho(f"Could not load {file.name}.", fg="red")
+    return {}
+
+
+def save_json(data: PackageDict, file: Path):
+    file.parent.mkdir(parents=True, exist_ok=True)
+    with open(file, "w") as fp:
+        json.dump(data, fp, indent=4)
+
+
+def validate_package_structure[T: PackageSchema[Any]](
+    package_info: PackageDict, model: type[T]
+) -> None | T:
+    try:
+        return model.model_validate({"package": package_info})
+    except ValidationError:
+        click.secho(
+            f"Package info ({list(package_info.keys())}) is incorrectly formatted.",
+            fg="red",
+        )
+        return None
+
+
+# ── Storage ───────────────────────────────────────────────────────────────────
 
 
 class StorageHandler:
@@ -72,16 +91,15 @@ class StorageHandler:
             return
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if os.path.exists(self.path):
+        if self.path.exists():
             registry = load_json(self.path)
-            for package_name in package_info.keys():
-                registry[package_name] = package_info[package_name]
+            registry.update(package_info)
             save_json(registry, self.path)
         else:
-            click.secho(f"{self.path.name} does not exist", fg="yellow")
+            click.secho(f"{self.path.name} does not exist, creating.", fg="yellow")
             save_json(package_info, self.path)
             click.secho(f"Created {self.path.name} at {self.path}", fg="blue")
-        click.secho(f"Wrote package to file at {self.path}", fg="green")
+        click.secho(f"Wrote package to {self.path}", fg="green")
 
     def update(self, package_info: PackageDict):
         package_name = next(iter(package_info))
@@ -91,123 +109,148 @@ class StorageHandler:
     def get_all(self) -> PackageDict:
         try:
             return load_json(self.path)
-        except:
+        except Exception:
             return {}
 
-    def get_package(self, package_name: str):
-        return load_json(self.path).get(package_name)
+    def get_package(self, package_name: str) -> dict[str, Any] | None:
+        data = load_json(self.path)
+        return data.get(package_name)
 
-    def remove_package(self, package_name: str):
+    def remove_package(self, package_name: str) -> bool:
         try:
             data = load_json(self.path)
+            if package_name not in data:
+                click.secho(f"{package_name} not found in {self.path.name}", fg="red")
+                return False
             data.pop(package_name)
             save_json(data, self.path)
             return True
-        except:
-            click.secho(f"Package not found in registry ({self.path})", fg="red")
-        return False
+        except Exception:
+            click.secho(
+                f"Failed to remove {package_name} from {self.path.name}", fg="red"
+            )
+            return False
 
 
 class RegistryHandler(StorageHandler):
     def __init__(self, path: Path = DEFAULT_REGISTRY_FILE) -> None:
         super().__init__(path, RegistryPackageSchema)
 
-
-def load_json(file: Path) -> PackageDict:
-    try:
-        if os.path.exists(file):
-            with open(file, "r") as fp:
-                registry = json.load(fp)
-            return registry
-        else:
-            with open(file, "w") as fp:
-                fp.write("{}")
-    except:
-        click.secho(
-            f"Could not load {file.name}.",
-            fg="red",
-        )
-    return {}
+    def set_github_url(self, package_name: str, github_url: str):
+        package = self.get_package(package_name)
+        if package is None:
+            click.secho(f"{package_name} not found in registry.", fg="red")
+            return
+        package["github_url"] = github_url
+        self.update({package_name: package})
+        click.secho(f"Recorded GitHub URL for {package_name}", fg="green")
 
 
-def pip_install(venv_path: Path, wheel_path: Path) -> bool:
-    python = get_venv_python(venv_path)
-    try:
-        subprocess.run(
-            [str(python), "-m", "pip", "install", str(wheel_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        click.secho(f"Installed {wheel_path.name} (static)", fg="green")
-        return True
-    except subprocess.CalledProcessError as e:
-        click.secho(f"Failed to install {wheel_path.name}: {e.stderr}", fg="red")
-        return False
+# ── URL helpers ───────────────────────────────────────────────────────────────
 
 
-def pip_install_editable(venv_path: Path, source_path: Path) -> bool:
-    python = get_venv_python(venv_path)
-    try:
-        subprocess.run(
-            [str(python), "-m", "pip", "install", "-e", str(source_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        click.secho(f"Installed {source_path.name} (editable)", fg="green")
-        return True
-    except subprocess.CalledProcessError as e:
-        click.secho(f"Failed to install {source_path.name}: {e.stderr}", fg="red")
-        return False
-
-
-def get_gitea_auth_url(package_name: str, path: Path = DEFAULT_CONFIG_DIR):
-    config = load_config(path).all
+def get_gitea_auth_url(
+    package_name: str, config_path: Path = DEFAULT_CONFIG_DIR
+) -> str:
+    config = load_config(config_path).all
     return f"http://{config['gitea_username']}:{config['gitea_token']}@{config['host']}/{config['gitea_username']}/{package_name}.git"
 
 
-def get_gitea_public_url(package_name: str, path: Path = DEFAULT_CONFIG_DIR):
-    config = load_config(path).all
+def get_gitea_public_url(
+    package_name: str, config_path: Path = DEFAULT_CONFIG_DIR
+) -> str:
+    config = load_config(config_path).all
     return f"http://{config['host']}/{config['gitea_username']}/{package_name}.git"
 
 
-def check_package_exists(package_name: str):
-    return requests.get(get_gitea_auth_url(package_name)).status_code
+def get_github_url(package_name: str, config_path: Path = DEFAULT_CONFIG_DIR) -> str:
+    config = load_config(config_path).all
+    return f"https://github.com/{config['github_username']}/{package_name}"
 
 
-def get_status(url: str):
-    return requests.get(url).status_code
+def get_github_clone_url(
+    package_name: str, config_path: Path = DEFAULT_CONFIG_DIR
+) -> str:
+    config = load_config(config_path).all
+    token = config["github_token"]
+    username = config["github_username"]
+    return f"https://{username}:{token}@github.com/{username}/{package_name}.git"
 
 
-def status_code_result(status_code: int):
-    status_messages = {
+# ── Network checks ────────────────────────────────────────────────────────────
+
+
+def get_status(url: str) -> int:
+    try:
+        return requests.get(url).status_code
+    except requests.ConnectionError:
+        return 503
+
+
+def status_code_result(status_code: int) -> str:
+    return {
+        200: "OK.",
         401: "Unauthorized.",
         403: "Access not permitted.",
         404: "Could not locate the package.",
         500: "Internal server error.",
-    }
-    return status_messages[status_code]
+        503: "Could not connect.",
+    }.get(status_code, f"Unexpected status code: {status_code}")
 
 
-def clone_from_gitea(gitea_url: str, package_path: Path) -> Path | None:
+def check_gitea_exists(
+    package_name: str, config_path: Path = DEFAULT_CONFIG_DIR
+) -> bool:
+    url = get_gitea_auth_url(package_name, config_path)
+    return get_status(url) == 200
+
+
+def check_github_exists(
+    package_name: str, config_path: Path = DEFAULT_CONFIG_DIR
+) -> bool:
+    config = load_config(config_path).all
+    url = f"https://api.github.com/repos/{config['github_username']}/{package_name}"
+    headers = {"Authorization": f"Bearer {config['github_token']}"}
+    try:
+        return requests.get(url, headers=headers).status_code == 200
+    except requests.ConnectionError:
+        return False
+
+
+# ── Git operations ────────────────────────────────────────────────────────────
+
+
+def clone_repo(clone_url: str, dest: Path, public_url: str) -> Path | None:
     try:
         subprocess.run(
-            ["git", "clone", gitea_url, str(package_path)],
+            ["git", "clone", clone_url, str(dest)],
             check=True,
             capture_output=True,
             text=True,
         )
-        return package_path
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", public_url],
+            cwd=dest,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return dest
     except subprocess.CalledProcessError as e:
-        click.secho(f"Failed to clone package: {e.stderr}", fg="red")
-    return None
-
+        click.secho(f"Failed to clone: {e.stderr}", fg="red")
+        return None
 
 def pull_latest(package_path: Path) -> bool:
     try:
         subprocess.run(
-            ["git", "pull"],
+            ["git", "checkout", "main"],
+            cwd=package_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "pull", "origin", "main"],
             cwd=package_path,
             check=True,
             capture_output=True,
@@ -217,6 +260,9 @@ def pull_latest(package_path: Path) -> bool:
     except subprocess.CalledProcessError as e:
         click.secho(f"Failed to update package: {e.stderr}", fg="red")
         return False
+
+
+# ── Package metadata ──────────────────────────────────────────────────────────
 
 
 def get_package_version(package_path: Path) -> str | None:
@@ -236,126 +282,121 @@ def get_package_version(package_path: Path) -> str | None:
             return None
 
 
-def build_package_records(
-    package_name: str, gitea_url: str, version: str, path: Path, editable: bool
-) -> dict[str, dict[str, str]]:
-    register_info = {
-        package_name: {
-            "gitea_url": gitea_url,
-            "version": version,
-            "path": str(path),
-        }
-    }
-    return register_info
+# ── Resolution ────────────────────────────────────────────────────────────────
 
 
 def resolve_package_path(
     package_name: str,
-    version: str | None,
     editable: bool,
     registry_handler: RegistryHandler,
+    config_path: Path = DEFAULT_CONFIG_DIR,
 ) -> Path | None:
     package = registry_handler.get_package(package_name)
-
     if package is not None:
-        package_path = Path(package["path"])
+        click.secho(f"Found {package_name} in registry.", fg="green")
+        return Path(package["path"])
 
-        if editable:
-            click.secho("Found package in register.", fg="green")
-            return package_path
+    click.secho(f"Checking Gitea for {package_name}...", fg="blue")
+    if check_gitea_exists(package_name, config_path):
+        click.secho(f"Found {package_name} on Gitea, cloning...", fg="blue")
+        auth_url = get_gitea_auth_url(package_name, config_path)
+        public_url = get_gitea_public_url(package_name, config_path)
+        dest = DEFAULT_PACKAGES_PATH / package_name
+        path = clone_repo(auth_url, dest, public_url)
+        if path is None:
+            return None
+        version = str(get_package_version(path))
+        registry_handler.register(
+            {
+                package_name: {
+                    "gitea_url": public_url,
+                    "version": version,
+                    "path": str(path),
+                    "github_url": None,
+                }
+            }
+        )
+        return path
 
-        if find_wheel(package_path, version) is not None:
-            click.secho("Found package in register.", fg="green")
-            return package_path
+    click.secho(f"{package_name} not on Gitea, checking GitHub...", fg="yellow")
+    if check_github_exists(package_name, config_path):
+        click.secho(f"Found {package_name} on GitHub, cloning...", fg="blue")
+        clone_url = get_github_clone_url(package_name, config_path)
+        public_url = get_github_url(package_name, config_path)
+        dest = DEFAULT_PACKAGES_PATH / package_name
+        path = clone_repo(clone_url, dest, public_url)
+        if path is None:
+            return None
+        version = str(get_package_version(path))
+        registry_handler.register(
+            {
+                package_name: {
+                    "gitea_url": "",
+                    "version": version,
+                    "path": str(path),
+                    "github_url": public_url,
+                }
+            }
+        )
+        return path
 
-        click.secho("Wheel not found locally, pulling latest...", fg="yellow")
-        if pull_latest(package_path) and find_wheel(package_path, version) is not None:
-            return package_path
-
-        label = f"{package_name}=={version}" if version else package_name
-        click.secho(f"Could not find {label} in repository.", fg="red")
-        return None
-
-    return fetch_and_register_package(package_name, editable, registry_handler)
-
-
-def find_wheel(package_path: Path, version: str | None) -> Path | None:
-    dist_dir = package_path / "dist"
-    if not dist_dir.exists():
-        return None
-
-    wheels = sorted(dist_dir.glob("*.whl"))
-    if not wheels:
-        return None
-
-    if version is None:
-        return wheels[-1]
-
-    for wheel in wheels:
-        parts = wheel.stem.split("-")
-        if len(parts) >= 2 and parts[1] == version:
-            return wheel
-
+    click.secho(f"{package_name} not found locally, on Gitea, or on GitHub.", fg="red")
     return None
 
 
-def fetch_and_register_package(
-    package_name: str,
-    editable: bool,
-    registry_handler: RegistryHandler,
-) -> Path | None:
-    gitea_url = get_gitea_auth_url(package_name)
-    status_code = get_status(gitea_url)
-    if status_code != 200:
-        click.secho(status_code_result(status_code), fg="red")
-        return None
-
-    package_path = clone_from_gitea(gitea_url, DEFAULT_PACKAGES_PATH / package_name)
-    if package_path is None:
-        click.secho("Unable to resolve package path.", fg="red")
-        return None
-
-    package_version = str(get_package_version(package_path))
-    public_url = get_gitea_public_url(package_name)
-
-    register_info = build_package_records(
-        package_name, public_url, package_version, package_path, editable
-    )
-    registry_handler.register(register_info)
-    return package_path
+# ── Venv operations ───────────────────────────────────────────────────────────
 
 
-def install_into_venv(
-    venv: Path, package_path: Path, editable: bool, version: str | None
-) -> bool:
-    if editable:
-        return pip_install_editable(venv, package_path)
-
-    wheel_path = find_wheel(package_path, version)
-    if wheel_path is None:
-        label = f"{package_path.name}=={version}" if version else package_path.name
-        click.secho(f"No matching wheel found for {label}", fg="red")
+def pip_install(venv_path: Path, local_path: Path) -> bool:
+    python = get_venv_python(venv_path)
+    try:
+        subprocess.run(
+            [str(python), "-m", "pip", "install", str(local_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        click.secho(f"Installed {local_path.name} (static)", fg="green")
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to install {local_path.name}: {e.stderr}", fg="red")
         return False
 
-    return pip_install(venv, wheel_path)
 
-
-def uninstall_from_venv(package_name: str, venv: Path):
+def pip_install_editable(venv_path: Path, source_path: Path) -> bool:
+    python = get_venv_python(venv_path)
     try:
-        python = get_venv_python(venv)
+        subprocess.run(
+            [str(python), "-m", "pip", "install", "-e", str(source_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        click.secho(f"Installed {source_path.name} (editable)", fg="green")
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to install {source_path.name}: {e.stderr}", fg="red")
+        return False
+
+
+def install_into_venv(venv: Path, package_path: Path, editable: bool) -> bool:
+    if editable:
+        return pip_install_editable(venv, package_path)
+    return pip_install(venv, package_path)
+
+
+def uninstall_from_venv(package_name: str, venv: Path) -> bool:
+    python = get_venv_python(venv)
+    try:
         result = subprocess.run(
             [str(python), "-m", "pip", "uninstall", package_name, "-y"],
             check=True,
             capture_output=True,
             text=True,
         )
-
         if f"Skipping {package_name} as it is not installed" in result.stderr:
-            click.secho(
-                f"Package {package_name} was not found in the venv.", fg="yellow"
-            )
+            click.secho(f"{package_name} was not installed in the venv.", fg="yellow")
             return False
-
         return True
     except subprocess.CalledProcessError as e:
         click.secho(f"Failed to uninstall {package_name}: {e.stderr}", fg="red")
@@ -370,3 +411,113 @@ def is_installed_in_venv(package_name: str, venv: Path) -> bool:
         text=True,
     )
     return result.returncode == 0
+
+
+# ── Publish helpers (to be expanded) ─────────────────────────────────────────
+
+
+def get_local_deps(config_path: Path = DEFAULT_CONFIG_DIR) -> list[str]:
+    registry = load_json(DEFAULT_REGISTRY_FILE)
+    return list(registry.keys())
+
+
+def rewrite_pyproject_for_publish(
+    project_path: Path,
+    registry_handler: RegistryHandler,
+    config_path: Path = DEFAULT_CONFIG_DIR,
+) -> dict[str, str]:
+    pyproject_path = project_path / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+
+    try:
+        deps: list[str] = data["project"]["dependencies"]
+    except KeyError:
+        try:
+            deps = data["tool"]["poetry"]["dependencies"]
+        except KeyError:
+            return {}
+
+    rewrites: dict[str, str] = {}
+    new_deps = []
+
+    for dep in deps:
+        package_name = dep.split("==")[0].split(">=")[0].strip()
+        package = registry_handler.get_package(package_name)
+
+        if package is not None:
+            github_url = package.get("github_url")
+            version = package.get("version")
+
+            if github_url:
+                git_dep = f"{package_name} @ git+{github_url}.git@v{version}"
+                new_deps.append(git_dep)  # type: ignore
+                rewrites[package_name] = git_dep
+            else:
+                click.secho(
+                    f"⚠ {package_name} has no GitHub URL — publish it first with `lpm publish github` from its directory.",
+                    fg="yellow",
+                )
+                new_deps.append(dep)  # type: ignore
+        else:
+            new_deps.append(dep)  # type: ignore
+
+    original_text = pyproject_path.read_text()
+    return {"original": original_text, "rewrites": str(rewrites)}
+
+
+def get_lock_path(project_path: Path) -> Path:
+    return project_path / "lpm.lock"
+
+
+def load_lock(project_path: Path) -> dict[str, str]:
+    path = get_lock_path(project_path)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception:
+        click.secho("Could not load lpm.lock.", fg="red")
+        return {}
+
+
+def save_lock(project_path: Path, data: dict[str, str]):
+    path = get_lock_path(project_path)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+def pin_package(project_path: Path, package_name: str, version: str):
+    data = load_lock(project_path)
+    data[package_name] = version
+    save_lock(project_path, data)
+
+
+def unpin_package(project_path: Path, package_name: str):
+    data = load_lock(project_path)
+    data.pop(package_name, None)
+    save_lock(project_path, data)
+
+
+def get_pinned_version(project_path: Path, package_name: str) -> str | None:
+    return load_lock(project_path).get(package_name)
+
+
+def get_all_pinned(project_path: Path) -> dict[str, str]:
+    return load_lock(project_path)
+
+
+def checkout_version(package_path: Path, version: str) -> bool:
+    try:
+        subprocess.run(
+            ["git", "checkout", f"v{version}"],
+            cwd=package_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Version v{version} not found: {e.stderr}", fg="red")
+        return False

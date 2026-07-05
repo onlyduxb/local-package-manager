@@ -44,7 +44,7 @@ def resolve_venv(project_dir: Path = Path.cwd()) -> Path | None:
         venv = find_poetry_venv(project_dir)
         if venv:
             return venv
-
+    click.secho("Venv could not be resolved.", fg="red")
     return None
 
 
