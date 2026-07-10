@@ -13,6 +13,7 @@ from .crud import (
     pull_latest,
     get_package_version,
     is_installed_in_venv,
+    push_package
 )
 from .config import save_config, DEFAULT_CONFIG_DIR, Config
 from .helpers import resolve_venv, collect_packages, check_dependencies
@@ -186,14 +187,16 @@ def update(package_name: str):
     if version is None:
         return
 
-    registry_handler.register({
-        package_name: {
-            "gitea_url": package["gitea_url"],
-            "version": version,
-            "path": str(package_path),
-            "github_url": package.get("github_url"),
+    registry_handler.register(
+        {
+            package_name: {
+                "gitea_url": package["gitea_url"],
+                "version": version,
+                "path": str(package_path),
+                "github_url": package.get("github_url"),
+            }
         }
-    })
+    )
 
     venv = resolve_venv(project_path)
     if venv is None:
@@ -205,6 +208,7 @@ def update(package_name: str):
 
     pin_package(project_path, package_name, str(version))
     click.secho(f"{package_name} updated to {version}.", fg="green")
+
 
 @click.group()
 def publish():
@@ -236,6 +240,12 @@ def pypi():
     raise NotImplementedError()
 
 
-# @click.command(context_settings=CONTEXT_SETTINGS)
-# @click.argument("--no_build", "no_build", is_flag=True)
-# def bump(no_build: bool): ...
+@click.command(context_settings=CONTEXT_SETTINGS)
+@click.option(
+    "--project",
+    "project_path",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path.cwd(),
+)
+def push(project_path: Path):
+    push_package(project_path)

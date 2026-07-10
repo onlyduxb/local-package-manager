@@ -10,6 +10,7 @@ from typing import Dict, Any
 import tomllib
 import json
 import click
+import re
 
 DEFAULT_REGISTRY_FILE = Path(user_config_dir("lpm")) / "registry.json"
 DEFAULT_LOCK_FILE = Path.cwd() / "lpm.lock"
@@ -239,6 +240,7 @@ def clone_repo(clone_url: str, dest: Path, public_url: str) -> Path | None:
     except subprocess.CalledProcessError as e:
         click.secho(f"Failed to clone: {e.stderr}", fg="red")
         return None
+
 
 def pull_latest(package_path: Path) -> bool:
     try:
@@ -521,3 +523,164 @@ def checkout_version(package_path: Path, version: str) -> bool:
     except subprocess.CalledProcessError as e:
         click.secho(f"Version v{version} not found: {e.stderr}", fg="red")
         return False
+
+
+def calculate_new_version(current: str, bump_type: str) -> str:
+    parts = current.split(".")
+    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+
+    if bump_type == "major":
+        return f"{major + 1}.0.0"
+    elif bump_type == "minor":
+        return f"{major}.{minor + 1}.0"
+    elif bump_type == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    return current
+
+
+def prompt_version_bump(current_version: str) -> str:
+    patch = calculate_new_version(current_version, "patch")
+    minor = calculate_new_version(current_version, "minor")
+    major = calculate_new_version(current_version, "major")
+
+    click.echo(f"\nCurrent version: {current_version}")
+    click.echo(f"  [1] Patch → {patch}")
+    click.echo(f"  [2] Minor → {minor}")
+    click.echo(f"  [3] Major → {major}")
+    click.echo(f"  [4] Keep  → {current_version}")
+
+    choice = click.prompt(
+        "Choice", type=click.Choice(["1", "2", "3", "4"]), show_choices=False
+    )
+
+    return {
+        "1": patch,
+        "2": minor,
+        "3": major,
+        "4": current_version,
+    }[choice]
+
+
+def bump_version_in_toml(project_path: Path, new_version: str) -> bool:
+    pyproject_path = project_path / "pyproject.toml"
+    if not pyproject_path.exists():
+        click.secho("No pyproject.toml found.", fg="red")
+        return False
+
+    content = pyproject_path.read_text()
+    pattern = r'(version\s*=\s*")[^"]*(")'
+    if not re.search(pattern, content):
+        click.secho("Could not find version field in pyproject.toml.", fg="red")
+        return False
+
+    new_content = re.sub(pattern, rf"\g<1>{new_version}\2", content, count=1)
+    pyproject_path.write_text(new_content)
+    click.secho(f"Version bumped to {new_version} in pyproject.toml", fg="green")
+    return True
+
+
+def is_clean_working_tree(project_path: Path) -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=project_path,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() == ""
+
+
+def tag_version(project_path: Path, version: str) -> bool:
+    try:
+        subprocess.run(
+            ["git", "tag", f"v{version}"],
+            cwd=project_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to tag version: {e.stderr}", fg="red")
+        return False
+
+
+def push_to_remote(
+    project_path: Path, remote: str = "origin", branch: str = "main"
+) -> bool:
+    try:
+        subprocess.run(
+            ["git", "push", remote, branch],
+            cwd=project_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "push", remote, "--tags"],
+            cwd=project_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to push: {e.stderr}", fg="red")
+        return False
+
+
+def commit_version_bump(project_path: Path, version: str) -> bool:
+    try:
+        subprocess.run(
+            ["git", "add", "pyproject.toml"],
+            cwd=project_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", f"bump version to {version}"],
+            cwd=project_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        click.secho(f"Failed to commit version bump: {e.stderr}", fg="red")
+        return False
+
+
+def push_package(project_path: Path) -> bool:
+    if not is_clean_working_tree(project_path):
+        click.secho(
+            "Uncommitted changes detected. Commit or stash them first.", fg="red"
+        )
+        return False
+
+    current_version = get_package_version(project_path)
+    if current_version is None:
+        return False
+
+    new_version = prompt_version_bump(current_version)
+
+    if new_version != current_version:
+        if not bump_version_in_toml(project_path, new_version):
+            return False
+        if not commit_version_bump(project_path, new_version):
+            return False
+
+    if not tag_version(project_path, new_version):
+        return False
+
+    if not push_to_remote(project_path):
+        return False
+
+    registry = RegistryHandler()
+    package = registry.get_package(project_path.name)
+    if package:
+        package["version"] = new_version
+        registry.update({project_path.name: package})
+        click.secho(f"Registry updated to {new_version}", fg="green")
+
+    click.secho(f"\n{project_path.name}@{new_version} pushed successfully.", fg="green")
+    return True
