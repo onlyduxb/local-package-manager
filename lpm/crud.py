@@ -6,6 +6,7 @@ from .config import load_config, DEFAULT_CONFIG_DIR
 import subprocess
 import requests
 from platformdirs import user_config_dir, user_data_dir
+from .helpers import resolve_venv
 from typing import Dict, Any
 import tomllib
 import json
@@ -37,9 +38,6 @@ class PackageSchema[T: PackageInfo](BaseModel):
 
 
 class RegistryPackageSchema(PackageSchema[RegistryPackageInfo]): ...
-
-
-class DependencyPackageSchema(PackageSchema[PackageInfo]): ...
 
 
 # ── JSON helpers ──────────────────────────────────────────────────────────────
@@ -684,3 +682,41 @@ def push_package(project_path: Path) -> bool:
 
     click.secho(f"\n{project_path.name}@{new_version} pushed successfully.", fg="green")
     return True
+
+def update_package(package_name: str, install_here: bool, registry_handler: RegistryHandler, project_path: Path):
+    package = registry_handler.get_package(package_name)
+    if package is None:
+        click.secho(f"{package_name} is not registered.", fg="red")
+        return
+
+    package_path = Path(package["path"])
+
+    click.secho("Pulling latest changes...", fg="yellow")
+    if not pull_latest(package_path):
+        return
+
+    version = get_package_version(package_path)
+    if version is None:
+        return
+
+    registry_handler.register(
+        {
+            package_name: {
+                "gitea_url": package["gitea_url"],
+                "version": version,
+                "path": str(package_path),
+                "github_url": package.get("github_url"),
+            }
+        }
+    )
+    click.secho(f"{package_name} updated to {version}.", fg="green")
+    if install_here:
+        venv = resolve_venv(project_path)
+        if venv is None:
+            click.secho("No venv found in current directory.", fg="red")
+            return
+
+        if not install_into_venv(venv, package_path, False):
+            return
+
+        pin_package(project_path, package_name, str(version))

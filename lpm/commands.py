@@ -10,10 +10,10 @@ from .crud import (
     resolve_package_path,
     install_into_venv,
     uninstall_from_venv,
-    pull_latest,
     get_package_version,
     is_installed_in_venv,
-    push_package
+    push_package,
+    update_package
 )
 from .config import save_config, DEFAULT_CONFIG_DIR, Config
 from .helpers import resolve_venv, collect_packages, check_dependencies
@@ -167,48 +167,21 @@ def uninstall(package_name: str, remove_files: bool):
 
 
 @click.command(context_settings=CONTEXT_SETTINGS)
-@click.argument("package_name")
-def update(package_name: str):
+@click.argument("package_name", required=False)
+@click.option("--all", "update_all", is_flag=True, default=False, help="Update all registered packages.")
+@click.option("--install-here", is_flag=True, default=False)
+def update(package_name: str, install_here: bool, update_all: bool):
     registry_handler = RegistryHandler()
     project_path = Path.cwd()
-
-    package = registry_handler.get_package(package_name)
-    if package is None:
-        click.secho(f"{package_name} is not registered.", fg="red")
+    if update_all:
+        for package in registry_handler.get_all().keys():
+            update_package(package, install_here, registry_handler, project_path)
+        click.secho("Updated all packages!", fg="green")
         return
-
-    package_path = Path(package["path"])
-
-    click.secho("Pulling latest changes...", fg="yellow")
-    if not pull_latest(package_path):
+    if package_name:
+        update_package(package_name, install_here, registry_handler, project_path)
         return
-
-    version = get_package_version(package_path)
-    if version is None:
-        return
-
-    registry_handler.register(
-        {
-            package_name: {
-                "gitea_url": package["gitea_url"],
-                "version": version,
-                "path": str(package_path),
-                "github_url": package.get("github_url"),
-            }
-        }
-    )
-
-    venv = resolve_venv(project_path)
-    if venv is None:
-        click.secho("No venv found in current directory.", fg="red")
-        return
-
-    if not install_into_venv(venv, package_path, False):
-        return
-
-    pin_package(project_path, package_name, str(version))
-    click.secho(f"{package_name} updated to {version}.", fg="green")
-
+    click.secho("No package name provided and not updating all packages!", fg="red")
 
 @click.group()
 def publish():
